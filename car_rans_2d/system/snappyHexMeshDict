@@ -1,0 +1,91 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  12
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+castellatedMesh true;
+snap            true;
+addLayers       false;
+
+geometry
+{
+    Car
+    {
+        type triSurfaceMesh;
+        file "2d.stl";
+    }
+    refinementBox
+    {
+        type searchableBox;
+        min (0.02010 -0.080 -0.001);
+        // Extend the refined wake region all the way to the outlet (y = 0.10)
+        // so that the downstream cells do not become coarse again.
+        max (0.02095  0.100  0.030);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells       500000;
+    maxGlobalCells      1000000;
+    minRefinementCells  10;
+    maxLoadUnbalance    0.10;
+    nCellsBetweenLevels 2;
+
+    features ();
+
+    refinementSurfaces
+    {
+        Car
+        {
+            level (2 3);
+            patchInfo { type wall; }
+        }
+    }
+
+    resolveFeatureAngle 30;
+
+    refinementRegions
+    {
+        refinementBox
+        {
+            mode inside;
+            levels ((1E15 1));
+        }
+    }
+
+    // Fluid point upstream/above the car and outside the closed STL.
+    locationInMesh (0.02050 0.047 0.033);
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch 10;
+    tolerance 2.0;
+    nSolveIter 50;
+    nRelaxIter 10;
+    nFeatureSnapIter 0;
+    implicitFeatureSnap false;
+    explicitFeatureSnap false;
+    multiRegionFeatureSnap false;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+}
+
+writeFlags (scalarLevels);
+mergeTolerance 1e-6;
+
+// ************************************************************************* //

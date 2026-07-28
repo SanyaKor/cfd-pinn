@@ -1,0 +1,36 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  12
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+
+cutPlane
+{
+    type            surfaces;
+    libs            ("libsampling.so");
+    writeControl    writeTime;
+
+    surfaceFormat   vtk;
+    fields          ( p U k omega nut );
+
+    interpolationScheme cellPoint;
+
+    surfaces
+    (
+        carCentrePlane
+        {
+            type            cutPlane;
+            planeType       pointAndNormal;
+            // Longitudinal centre section: flow (y) versus height (z).
+            // Middle of the thin quasi-2D domain and of the supplied STL.
+            point           (0.0205 0 0);
+            normal          (1 0 0);
+            interpolate     true;
+        }
+    );
+}
+
+
+// ************************************************************************* //

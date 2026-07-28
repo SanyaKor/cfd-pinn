@@ -1,0 +1,101 @@
+# =========================
+
+# General
+
+# =========================
+
+.DS_Store
+
+Thumbs.db
+
+*.log
+
+*.tmp
+
+*.bak
+
+*.swp
+
+*.swo
+
+# =========================
+
+# C++
+
+# =========================
+
+build/
+
+cmake-build-*/
+
+CMakeFiles/
+
+CMakeCache.txt
+
+compile_commands.json
+
+Makefile
+
+*.o
+
+*.obj
+
+*.so
+
+*.a
+
+*.out
+
+*.exe
+
+# =========================
+
+# Python
+
+# =========================
+
+__pycache__/
+
+*.py[cod]
+
+*.pyo
+
+*.pyd
+
+*.egg-info/
+
+*.egg
+
+.env
+
+.venv
+
+venv/
+
+ENV/
+
+env/
+
+.ipynb_checkpoints/
+
+# =========================
+
+# Shell
+
+# =========================
+
+*.sh~
+
+*.bash_history
+
+# =========================
+
+# IDE / Editor
+
+# =========================
+
+.vscode/
+
+.idea/
+
+*.code-workspace

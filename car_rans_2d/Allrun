@@ -1,0 +1,9 @@
+#!/bin/sh
+# Quasi-2D version of car_rans using the supplied 2d.stl.
+set -eu
+cd "$(dirname "$0")"
+
+blockMesh
+snappyHexMesh -overwrite
+checkMesh -allGeometry -allTopology
+foamRun
