@@ -148,12 +148,47 @@ class PeriodicCondition(BoundaryCondition):
 
 
 def compute_boundary_loss(network: torch.nn.Module, conditions: Sequence[BoundaryCondition]) -> torch.Tensor:
-    """Sum independent condition losses; each condition evaluates the network."""
-
     if not conditions:
         raise ValueError("At least one boundary condition is required")
 
-    return torch.stack([condition.loss(network) for condition in conditions]).sum()
+    predictions = {}
+    losses = []
+
+    for condition in conditions:
+        # Keep periodic and custom conditions on their existing path.
+        if type(condition) not in (ValueCondition, FunctionCondition):
+            losses.append(condition.loss(network))
+            continue
+
+        key = (condition.boundary, condition.fields, condition.axes)
+
+        # Evaluate each boundary once per loss call.
+        if key not in predictions:
+            coords = condition.coordinates.detach().requires_grad_(True)
+            prediction = condition._predict(network, coords)
+            derivatives = condition._derivatives(coords, prediction)
+
+            predictions[key] = prediction, derivatives
+
+        prediction, derivatives = predictions[key]
+
+        if isinstance(condition, ValueCondition):
+            column = condition.fields.index(condition.field)
+            residual = prediction[:, column] - condition.value
+        else:
+            residual = condition.function(prediction, derivatives)
+
+        if (
+            not isinstance(residual, torch.Tensor)
+            or residual.ndim == 0
+            or residual.numel() == 0
+            or residual.shape[0] != len(condition.coordinates)
+        ):
+            raise ValueError("Residual must contain one row per boundary point")
+
+        losses.append(residual.square().mean())
+
+    return torch.stack(losses).sum()
 
 
 @dataclass(kw_only=True)

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from time import perf_counter
 
 import torch
 
@@ -35,6 +36,14 @@ def train(
         }
     }
     network.train()
+
+    # Exclude pending setup work from the training timer.
+    device = next(network.parameters()).device
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+    started = perf_counter()
 
     for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
@@ -107,5 +116,19 @@ def train(
         optimizer.step()
         history["total"].append(epoch_total)
         print(f"[Epoch {epoch:04d}] Mean total={epoch_total:.3e}", flush=True)
+
+    # Include completion of the final optimizer step on the accelerator.
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+    elapsed = perf_counter() - started
+    history["training_seconds"] = elapsed
+    hours, remainder = divmod(int(elapsed), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    print(
+        f"Training time: {hours:02d}:{minutes:02d}:{seconds:02d} ({elapsed:.2f} s)",
+        flush=True,
+    )
 
     return history
