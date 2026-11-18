@@ -1,67 +1,67 @@
-import VTKData
-from pathlib import Path
 import torch
-from normalizer import Normalizer, Mode
-from pinn import PINN
-from train import train
+from cfd_pinn.normalizer import Normalizer, Mode
+from cfd_pinn.pinn import PINN
+from cfd_pinn.train import train
 
+from cfd_pinn.physics.incompressible_les import IncompressibleLES
+import config
+from cfd_pinn.data.loader import load_simulations
+from cfd_pinn.data.batches import prepare_batches
 
-EPOCHS = 2000
-CONTINUITY_WEIGHT = 1e-4
-MOMENTUM_WEIGHT = 1e-6
 
 if __name__ == "__main__":
 
-    ROOT = Path.cwd()
-    if not (ROOT / 'car_rans_2d').exists():
-        ROOT = ROOT.parent
-
-    CASE = ROOT / 'car_rans_2d'
-
-    VTK_PATH = ROOT / 'carCentrePlane.vtk'
-    # VTK_PATH = CASE / 'postProcessing/cutPlane/500/carCentrePlane.vtk'
-
-    data = VTKData.VTKData(VTK_PATH)
-    data.read()
-
-    U = data.fields['U']
-
-    ##################################
-
-    yz_numpy = data.points[:, [1, 2]]
-    velocity_numpy = U[:, [1, 2]]
-    pressure_numpy = data.fields['p'][:, [0]]
-    nut_numpy = data.fields['nut'][:, 0]
-
-    ##################################
-
-    yz = torch.tensor(yz_numpy, dtype=torch.float32)
-    velocity = torch.tensor(velocity_numpy, dtype=torch.float32)
-    pressure = torch.tensor(pressure_numpy, dtype=torch.float32)
-    nut = torch.tensor(nut_numpy, dtype=torch.float32)
-
-    ##################################
-
-    FIELD_NAMES = ('Uy', 'Uz', 'p')
-    targets_physical = torch.cat([velocity, pressure], dim=1)
-
+    simulations = load_simulations(config.DATA_ROOT, config.CASES)
     normalizer = Normalizer()
-    yz_normalized = normalizer.normalize('coordinates', yz, Mode.MIN_MAX)
-    targets_normalized = normalizer.normalize('fields', targets_physical, Mode.MAX_ABS)
 
-    network = PINN(n_input=2,
-                   n_output=3,
-                   n_hidden=64,
-                   n_hidden_layers=3,
-                   normalizer=normalizer)
+    normalizer.fit(
+        "coordinates",
+        torch.cat([coords for sim in simulations for coords in sim.coords]),
+        Mode.MIN_MAX
+    )
 
-    optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
+    normalizer.fit(
+        "fields",
+        torch.cat([fields for sim in simulations for fields in sim.fields]),
+        Mode.MAX_ABS
+    )
 
-    train(network=network,
-          optimizer=optimizer,
-          continuity_weight=CONTINUITY_WEIGHT,
-          momentum_weight=MOMENTUM_WEIGHT,
-          epochs=EPOCHS,
-          yz=yz,
-          targets_normalized=targets_normalized,
-          nut=nut)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    print(f"Device: {device}")
+
+    for sim in simulations:
+        sim.fields_normalized = [normalizer.transform("fields", fields) for fields in sim.fields]
+
+    batches = prepare_batches(simulations, config.SIMULATIONS_PER_BATCH)
+
+    normalizer.to(device)
+    for batch in batches:
+        batch.to(device)
+
+    network = PINN(
+        n_input=4,
+        n_output=3,
+        n_hidden=config.N_HIDDEN,
+        n_hidden_layers=config.N_HIDDEN_LAYERS,
+        normalizer=normalizer,
+        physics=IncompressibleLES()
+    ).to(device)
+
+
+    optimizer = torch.optim.Adam(network.parameters(), lr=config.LEARNING_RATE)
+
+    history = train(
+        network=network,
+        optimizer=optimizer,
+        batches=batches,
+        epochs=config.EPOCHS,
+        continuity_weight=config.CONTINUITY_WEIGHT,
+        momentum_weight=config.MOMENTUM_WEIGHT,
+        boundary_weight=config.BOUNDARY_WEIGHT
+    )

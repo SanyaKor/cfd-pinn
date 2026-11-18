@@ -10,7 +10,7 @@ class Normalizer:
     def __init__(self):
         self.parameters = {}
 
-    def normalize(self, name, tensor, mode):
+    def fit(self, name, tensor, mode):
 
         if mode == Mode.MIN_MAX:
 
@@ -71,3 +71,9 @@ class Normalizer:
         if name not in self.parameters:
             raise KeyError(f'Normalization parameters for {name!r} not found')
         return self.parameters[name]
+
+    def to(self, device) -> None:
+        for parameters in self.parameters.values():
+            for name, value in parameters.items():
+                if isinstance(value, torch.Tensor):
+                    parameters[name] = value.to(device)
