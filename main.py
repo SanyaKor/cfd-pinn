@@ -33,6 +33,7 @@ if __name__ == "__main__":
     else:
         device = torch.device("cpu")
 
+
     print(f"Device: {device}")
 
     for sim in simulations:
@@ -65,3 +66,40 @@ if __name__ == "__main__":
         momentum_weight=config.MOMENTUM_WEIGHT,
         boundary_weight=config.BOUNDARY_WEIGHT
     )
+
+    output_dir = config.ROOT / "outputs"
+    output_dir.mkdir(exist_ok=True)
+
+    checkpoint_path = output_dir / "pinn_batched_7700.pt"
+
+    torch.save(
+        {
+            "model": network.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "normalizer": normalizer.parameters,
+            "history": history,
+            "model_config": {
+                "n_input": 4,
+                "n_output": 3,
+                "n_hidden": config.N_HIDDEN,
+                "n_hidden_layers": config.N_HIDDEN_LAYERS,
+            },
+            "training_config": {
+                "epochs": config.EPOCHS,
+                "learning_rate": config.LEARNING_RATE,
+                "simulations_per_batch": config.SIMULATIONS_PER_BATCH,
+                "continuity_weight": config.CONTINUITY_WEIGHT,
+                "momentum_weight": config.MOMENTUM_WEIGHT,
+                "boundary_weight": config.BOUNDARY_WEIGHT,
+            },
+            "training_cases": dict(config.CASES),
+            "epochs": len(history["total"]),
+            "simulation_velocities": {
+                sim.id: sim.parameters["velocity"]
+                for sim in simulations
+            },
+        },
+        checkpoint_path
+    )
+
+    print(f"Saved checkpoint: {checkpoint_path}")

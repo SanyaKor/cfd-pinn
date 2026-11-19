@@ -215,3 +215,89 @@ class BoundaryConditions:
 
     def loss(self, network: torch.nn.Module) -> torch.Tensor:
         return compute_boundary_loss(network, self.conditions)
+
+
+class DerivativeSlice:
+    """Expose one simulation's rows from shared derivatives."""
+
+    def __init__(self, derivatives, rows):
+        self.derivatives = derivatives
+        self.rows = rows
+
+    def grad(self, field, wrt=()):
+        return self.derivatives.grad(field, wrt)[self.rows]
+
+
+@dataclass
+class BoundaryPart:
+    simulation_index: int
+    rows: slice
+    conditions: list[BoundaryCondition]
+
+
+@dataclass
+class BoundaryGroup:
+    coords: torch.Tensor
+    fields: tuple[str, ...]
+    axes: tuple[str, ...]
+    parts: list[BoundaryPart]
+
+
+@dataclass
+class BoundaryBatch:
+    """Prepared boundary groups for one frame of a simulation batch."""
+
+    simulations: list[BoundaryConditions]
+    groups: list[BoundaryGroup]
+    separate_conditions: list[tuple[int, BoundaryCondition]]
+
+    def to(self, device) -> None:
+        for group in self.groups:
+            group.coords = group.coords.to(device)
+            for part in group.parts:
+                coords = group.coords[part.rows]
+                for condition in part.conditions:
+                    condition.coordinates = coords
+
+        for _, condition in self.separate_conditions:
+            condition.coordinates = condition.coordinates.to(device)
+            if isinstance(condition, PeriodicCondition):
+                condition.paired_coordinates = condition.paired_coordinates.to(device)
+
+
+def compute_batched_boundary_loss(network, frame: BoundaryBatch):
+    """Evaluate prepared groups without concatenating or regrouping points."""
+
+    losses = [[] for _ in frame.simulations]
+
+    for group in frame.groups:
+        coords = group.coords.detach().requires_grad_(True)
+        prediction = network.predict_physical(coords)
+        derivatives = CacheGrad(fields=group.fields, axes=group.axes)
+        derivatives.bind(coords, prediction)
+
+        for part in group.parts:
+            part_prediction = prediction[part.rows]
+            part_derivatives = DerivativeSlice(derivatives, part.rows)
+
+            for condition in part.conditions:
+                if isinstance(condition, ValueCondition):
+                    column = group.fields.index(condition.field)
+                    residual = part_prediction[:, column] - condition.value
+                else:
+                    residual = condition.function(part_prediction, part_derivatives)
+
+                if (
+                    not isinstance(residual, torch.Tensor)
+                    or residual.ndim == 0
+                    or residual.numel() == 0
+                    or residual.shape[0] != len(part_prediction)
+                ):
+                    raise ValueError("Residual must contain one row per boundary point")
+
+                losses[part.simulation_index].append(residual.square().mean())
+
+    for simulation_index, condition in frame.separate_conditions:
+        losses[simulation_index].append(condition.loss(network))
+
+    return torch.stack([torch.stack(values).sum() for values in losses])

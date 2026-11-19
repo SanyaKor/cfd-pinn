@@ -3,9 +3,15 @@ from time import perf_counter
 
 import torch
 
+from cfd_pinn.physics.boundary_conditions import compute_batched_boundary_loss
 from cfd_pinn.pinn import PINN
 from cfd_pinn.data.batches import SimulationBatch
 
+def synchronize(device):
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 def train(
     network: PINN,
@@ -43,7 +49,8 @@ def train(
         torch.cuda.synchronize(device)
     elif device.type == "mps":
         torch.mps.synchronize()
-    started = perf_counter()
+    training_started = perf_counter()
+    boundary_seconds = 0.0
 
     for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
@@ -80,11 +87,18 @@ def train(
                     + momentum_weight * momentum_loss
                 )
 
+                synchronize(device)
+                boundary_started = perf_counter()
+
                 boundary_loss = torch.zeros_like(data_loss)
                 if boundary_weight != 0:
-                    boundary_loss = torch.stack([
-                        boundaries.loss(network) for boundaries in batch.boundaries[frame_index]
-                    ])
+                    boundary_loss = compute_batched_boundary_loss(
+                        network,
+                        batch.boundaries[frame_index],
+                    )
+
+                synchronize(device)
+                boundary_seconds += perf_counter() - boundary_started
 
                 total_loss = data_loss + physics_loss + boundary_weight * boundary_loss
 
@@ -122,13 +136,14 @@ def train(
         torch.cuda.synchronize(device)
     elif device.type == "mps":
         torch.mps.synchronize()
-    elapsed = perf_counter() - started
+    elapsed = perf_counter() - training_started
     history["training_seconds"] = elapsed
     hours, remainder = divmod(int(elapsed), 3600)
     minutes, seconds = divmod(remainder, 60)
+
     print(
         f"Training time: {hours:02d}:{minutes:02d}:{seconds:02d} ({elapsed:.2f} s)",
         flush=True,
     )
-
+    print(f"Boundary_seconds:{boundary_seconds:.2f} s")
     return history

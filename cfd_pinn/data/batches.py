@@ -5,7 +5,10 @@ from dataclasses import dataclass
 import torch
 
 from cfd_pinn.data.simulations import Simulation
-from cfd_pinn.physics.boundary_conditions import BoundaryConditions, PeriodicCondition
+from cfd_pinn.physics.boundary_conditions import (
+    Boundary, BoundaryBatch, BoundaryConditions, BoundaryGroup, BoundaryPart,
+    FunctionCondition, ValueCondition,
+)
 
 
 @dataclass
@@ -15,20 +18,15 @@ class SimulationBatch:
     coords: list[torch.Tensor]
     targets: list[torch.Tensor]
     nut: list[torch.Tensor]
-    boundaries: list[list[BoundaryConditions]]
+    boundaries: list[BoundaryBatch]
 
     def to(self, device) -> None:
         self.coords = [tensor.to(device) for tensor in self.coords]
         self.targets = [tensor.to(device) for tensor in self.targets]
         self.nut = [tensor.to(device) for tensor in self.nut]
 
-        for frame_boundaries in self.boundaries:
-            for boundaries in frame_boundaries:
-                for condition in boundaries.conditions:
-
-                    condition.coordinates = condition.coordinates.to(device)
-                    if isinstance(condition, PeriodicCondition):
-                        condition.paired_coordinates = condition.paired_coordinates.to(device)
+        for frame in self.boundaries:
+            frame.to(device)
 
 
 def prepare_batches(simulations: Sequence[Simulation], simulations_per_batch: int = 1) -> list[SimulationBatch]:
@@ -79,8 +77,7 @@ def _combine_simulations(group: Sequence[Simulation]) -> SimulationBatch:
         batch.coords.append(torch.cat(coords))
         batch.targets.append(torch.cat(targets))
         batch.nut.append(torch.cat(nut))
-        # Device transfer must not modify the source simulation boundaries.
-        batch.boundaries.append(deepcopy(boundaries))
+        batch.boundaries.append(_prepare_boundaries(boundaries))
 
     return batch
 
@@ -110,3 +107,57 @@ def _validate_simulations(simulations: Sequence[Simulation]) -> None:
             if any(tensor.device.type != "cpu" for tensor in values):
                 raise ValueError("Prepare batches before transferring simulations to GPU")
 
+
+
+def _prepare_boundaries(simulations: list[BoundaryConditions]) -> BoundaryBatch:
+    """Build boundary tensors and row slices once, on CPU."""
+
+    # Keep source simulation coordinates independent of device transfers.
+    simulations = deepcopy(simulations)
+    frame = BoundaryBatch(simulations=simulations, groups=[], separate_conditions=[])
+    fields = simulations[0].fields
+    axes = simulations[0].axes
+
+    for simulation_index, boundaries in enumerate(simulations):
+        if not boundaries.conditions:
+            raise ValueError("Each simulation must have boundary conditions")
+        if boundaries.fields != fields or boundaries.axes != axes:
+            raise ValueError("Boundary field and axis layouts must match across simulations")
+        for condition in boundaries.conditions:
+            if condition.coordinates.device.type != "cpu":
+                raise ValueError("Prepare boundaries before transferring them to GPU")
+            if condition.fields != fields or condition.axes != axes:
+                raise ValueError("Condition layout must match its boundary collection")
+            if type(condition) not in (ValueCondition, FunctionCondition):
+                frame.separate_conditions.append((simulation_index, condition))
+
+    for boundary in Boundary:
+        coordinates = []
+        parts = []
+        start = 0
+
+        for simulation_index, boundaries in enumerate(simulations):
+            conditions = [
+                condition for condition in boundaries.conditions
+                if condition.boundary == boundary
+                and type(condition) in (ValueCondition, FunctionCondition)
+            ]
+            if not conditions:
+                continue
+
+            points = conditions[0].coordinates
+            if points.ndim != 2 or points.shape[1] != len(axes) or len(points) == 0:
+                raise ValueError("Boundary coordinates must be nonempty and match the axes")
+            for condition in conditions[1:]:
+                if not torch.equal(condition.coordinates, points):
+                    raise ValueError("Conditions on the same boundary must use identical points")
+
+            end = start + len(points)
+            parts.append(BoundaryPart(simulation_index, slice(start, end), conditions))
+            coordinates.append(points)
+            start = end
+
+        if coordinates:
+            frame.groups.append(BoundaryGroup(torch.cat(coordinates), fields, axes, parts))
+
+    return frame
